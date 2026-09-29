@@ -7,9 +7,10 @@ import * as Cesium from 'cesium';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
-const BUILDING_COLOR = Cesium.Color.fromCssColorString('#c8cdd3').withAlpha(0.95);
-const BUILDING_OUTLINE = Cesium.Color.fromCssColorString('#9ca3af').withAlpha(0.5);
-const ROAD_COLOR = Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.85);
+// Fully opaque color is CRITICAL! If alpha < 1, Cesium shows messy internal triangulation lines.
+const BUILDING_COLOR = Cesium.Color.fromCssColorString('#ffffff');
+const BUILDING_OUTLINE = Cesium.Color.fromCssColorString('#9ca3af');
+const ROAD_COLOR = Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.6);
 const HIGHLIGHT = Cesium.Color.YELLOW.withAlpha(0.9);
 
 let buildingDS = null;

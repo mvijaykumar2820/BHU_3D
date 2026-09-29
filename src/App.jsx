@@ -14,9 +14,9 @@ import {
   unhighlightBuilding,
 } from './utils/osmBuildings';
 
-// Light base map for clean city-model look
-const LIGHT_MAP =
-  'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+// Base map
+const BASE_MAP =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
 // Starting view (India)
 const INITIAL_VIEW = [78.9, 22.5, 3_500_000];
@@ -43,9 +43,9 @@ export default function App() {
     const v = new Cesium.Viewer(containerRef.current, {
       baseLayer: new Cesium.ImageryLayer(
         new Cesium.UrlTemplateImageryProvider({
-          url: LIGHT_MAP,
+          url: BASE_MAP,
           maximumLevel: 19,
-          credit: '© CartoDB © OpenStreetMap contributors',
+          credit: 'Esri, Maxar, Earthstar Geographics',
         }),
       ),
       terrain: token ? Cesium.Terrain.fromWorldTerrain() : undefined,
@@ -155,6 +155,10 @@ export default function App() {
     setStatus('⏳ Fetching building footprints from OpenStreetMap…');
 
     try {
+      // 0. Hide satellite map to enter 'clean 3D space' mode
+      v.imageryLayers.get(0).alpha = 0;
+      v.scene.globe.baseColor = Cesium.Color.fromCssColorString('#eaecef');
+
       // 1. Fetch & extrude buildings
       const count = await loadBuildings3D(v, rect);
       setBuildingCount(count);
@@ -211,6 +215,12 @@ export default function App() {
     clearBuildings(viewer);
     removeBuildings3D(viewer);
     removeRoadNetwork(viewer);
+
+    // Restore satellite map
+    if (viewer) {
+      viewer.imageryLayers.get(0).alpha = 1;
+    }
+    
     setStatus('Cleared. Draw a new ROI box.');
   };
 
