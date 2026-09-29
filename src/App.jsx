@@ -254,10 +254,7 @@ export default function App() {
         <p className="status" aria-live="polite">{status}</p>
 
         <ul className="legend">
-          <li><i style={{ background: '#e74c3c' }} />Tall (&gt;80 m)</li>
-          <li><i style={{ background: '#f59e0b' }} />Medium (40–80 m)</li>
-          <li><i style={{ background: '#22d3ee' }} />Normal (15–40 m)</li>
-          <li><i style={{ background: '#81D4FA' }} />Small (&lt;15 m)</li>
+          <li><i style={{ background: '#22d3ee' }} />3D Building</li>
           <li><i style={{ background: '#facc15' }} />Selected</li>
         </ul>
       </aside>

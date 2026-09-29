@@ -41,16 +41,9 @@ export async function loadOsmBuildings(viewer, rect) {
     inverse: true, // clip outside → keep inside
   });
 
-  // Colour by building height
+  // Simple colour — the 3D geometry already conveys height visually
   tileset.style = new Cesium.Cesium3DTileStyle({
-    color: {
-      conditions: [
-        ['${height} > 80', "color('#e74c3c', 0.88)"],   // tall  → red
-        ['${height} > 40', "color('#f59e0b', 0.85)"],   // med   → amber
-        ['${height} > 15', "color('#22d3ee', 0.85)"],   // norm  → cyan
-        ['true',           "color('#81D4FA', 0.75)"],   // small → light blue
-      ],
-    },
+    color: "color('#22d3ee', 0.8)",
   });
 
   tilesetRef = tileset;
