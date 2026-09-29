@@ -2,7 +2,7 @@ import * as Cesium from 'cesium';
 import { generateUlpin, makePniu14 } from '../utils/ulpinGenerator';
 
 const MIN_ROI_M = 8;
-const MAX_ROI_M = 2000;
+const MAX_ROI_M = 10000;
 const EARTH_R = 6378137;
 
 /**
@@ -48,7 +48,7 @@ function rectFrom(a, b) {
   );
 }
 
-function sizeInMetres(r) {
+export function sizeInMetres(r) {
   const midLat = (r.north + r.south) / 2;
   return {
     w: (r.east - r.west) * Math.cos(midLat) * EARTH_R,
@@ -110,7 +110,7 @@ async function buildBuilding(viewer, rect) {
  * Two-click bounding-box tool. Right-click cancels.
  * onStatus(text) -> sidebar hint, onDone() -> tool finished or cancelled.
  */
-export function createRoiTool(viewer, { onStatus = () => {}, onDone = () => {} } = {}) {
+export function createRoiTool(viewer, { onStatus = () => {}, onDone = () => {}, onRect = () => {} } = {}) {
   const scene = viewer.scene;
   let handler = null;
   let corner1 = null;
@@ -163,12 +163,8 @@ export function createRoiTool(viewer, { onStatus = () => {}, onDone = () => {} }
       return;
     }
 
-    handler?.destroy();
-    handler = null;
-    onStatus('Building floor volumes...');
-    const ids = await buildBuilding(viewer, rect);
     stop();
-    onStatus(`Created ${ids.length} floor volumes. Click a floor to inspect it.`);
+    onRect(rect);
   };
 
   const onMove = ({ endPosition }) => {
