@@ -1,4 +1,3 @@
-import * as Cesium from 'cesium';
 
 /**
  * HUD card that shows info about a clicked OSM 3D building.

@@ -1,301 +1,148 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import * as Cesium from 'cesium';
-import { clearBuildings, createRoiTool, sizeInMetres } from './tools/roiSlicer';
-import PropertyHUD from './components/PropertyHUD';
+import { useState } from 'react';
+import CityDiorama from './components/CityDiorama';
+import { fetchBuildings, fetchRoads } from './utils/osmFetcher';
 import BuildingHUD from './components/BuildingHUD';
-import SearchBar from './components/SearchBar';
-import {
-  loadBuildings3D,
-  removeBuildings3D,
-  loadRoadNetwork,
-  removeRoadNetwork,
-  getBuildingInfoFromEntity,
-  highlightBuilding,
-  unhighlightBuilding,
-} from './utils/osmBuildings';
-
-// Base map
-const BASE_MAP =
-  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-
-// Starting view (India)
-const INITIAL_VIEW = [78.9, 22.5, 3_500_000];
 
 export default function App() {
-  const containerRef = useRef(null);
-  const roiRef = useRef(null);
-  const [viewer, setViewer] = useState(null);
-  const [selected, setSelected] = useState(null);
-  const [drawing, setDrawing] = useState(false);
-  const [seeThrough, setSeeThrough] = useState(false);
-  const [status, setStatus] = useState('Zoom to a site, then draw an ROI box.');
-
-  // 3D city-model state
-  const [buildingCount, setBuildingCount] = useState(null);
-  const [buildingInfo, setBuildingInfo] = useState(null);
+  const [query, setQuery] = useState('Banaras Hindu University');
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('Enter a location to generate a 3D architectural model.');
+  
+  const [dioramaData, setDioramaData] = useState(null);
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
 
-  // ── Viewer setup ──
-  useEffect(() => {
-    const token = import.meta.env.VITE_CESIUM_TOKEN;
-    if (token) Cesium.Ion.defaultAccessToken = token;
-
-    const v = new Cesium.Viewer(containerRef.current, {
-      baseLayer: new Cesium.ImageryLayer(
-        new Cesium.UrlTemplateImageryProvider({
-          url: BASE_MAP,
-          maximumLevel: 19,
-          credit: 'Esri, Maxar, Earthstar Geographics',
-        }),
-      ),
-      terrain: token ? Cesium.Terrain.fromWorldTerrain() : undefined,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      animation: false,
-      timeline: false,
-      fullscreenButton: false,
-      vrButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-    });
-
-    // Clean scene — light sky, no atmosphere haze
-    v.scene.skyBox.show = false;
-    v.scene.sun.show = false;
-    v.scene.moon.show = false;
-    v.scene.skyAtmosphere.show = false;
-    v.scene.fog.enabled = false;
-    v.scene.globe.showGroundAtmosphere = false;
-    v.scene.backgroundColor = Cesium.Color.fromCssColorString('#eaecef');
-
-    v.scene.globe.depthTestAgainstTerrain = true;
-
-    // Camera controller
-    v.scene.screenSpaceCameraController.enableCollisionDetection = false;
-    v.scene.screenSpaceCameraController.minimumZoomDistance = 2;
-    v.scene.screenSpaceCameraController.zoomEventTypes = [
-      Cesium.CameraEventType.RIGHT_DRAG,
-      Cesium.CameraEventType.WHEEL,
-      Cesium.CameraEventType.PINCH,
-      {
-        eventType: Cesium.CameraEventType.WHEEL,
-        modifier: Cesium.KeyboardEventModifier.CTRL,
-      },
-    ];
-
-    v.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
-    v.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(...INITIAL_VIEW) });
-
-    // Prevent macOS browser page zoom on trackpad pinch
-    const container = containerRef.current;
-    const handleWheel = (e) => { if (e.ctrlKey) e.preventDefault(); };
-    container?.addEventListener('wheel', handleWheel, { passive: false });
-
-    roiRef.current = createRoiTool(v, {
-      onStatus: setStatus,
-      onDone: () => setDrawing(false),
-      onRect: (rect) => handleRoiComplete(v, rect),
-    });
-    setViewer(v);
-
-    return () => {
-      container?.removeEventListener('wheel', handleWheel);
-      roiRef.current?.cancel();
-      clearBuildings(v);
-      removeBuildings3D(v);
-      removeRoadNetwork(v);
-      v.destroy();
-      setViewer(null);
-    };
-  }, []);
-
-  // ── Toggle see-through ground ──
-  useEffect(() => {
-    if (viewer) {
-      viewer.scene.globe.translucency.enabled = seeThrough;
-      viewer.scene.globe.translucency.frontFaceAlpha = 0.4;
-    }
-  }, [viewer, seeThrough]);
-
-  // ── Click handler: pick 3D building entities ──
-  useEffect(() => {
-    if (!viewer) return;
-    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-
-    handler.setInputAction(({ position }) => {
-      const picked = viewer.scene.pick(position);
-      if (Cesium.defined(picked) && picked.id instanceof Cesium.Entity) {
-        const entity = picked.id;
-        const info = getBuildingInfoFromEntity(entity);
-        if (info) {
-          highlightBuilding(entity);
-          setBuildingInfo(info);
-          setSelected(null);
-          return;
-        }
-      }
-      unhighlightBuilding();
-      setBuildingInfo(null);
-    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-
-    return () => handler.destroy();
-  }, [viewer]);
-
-  // ── Handle ROI box completion → build the 3D city model ──
-  async function handleRoiComplete(v, rect) {
-    if (!v || v.isDestroyed()) return;
+  const searchAndGenerate = async (e) => {
+    e?.preventDefault();
+    if (!query) return;
 
     setLoading(true);
-    setBuildingInfo(null);
-    setBuildingCount(null);
-    setSelected(null);
-    setStatus('⏳ Fetching building footprints from OpenStreetMap…');
+    setDioramaData(null);
+    setSelectedBuilding(null);
+    setStatus(`Searching for "${query}"...`);
 
     try {
-      // 0. Hide satellite map to enter 'clean 3D space' mode
-      v.imageryLayers.get(0).alpha = 0;
-      v.scene.globe.baseColor = Cesium.Color.fromCssColorString('#eaecef');
+      // 1. Geocode via Nominatim
+      const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`);
+      const geoData = await geoRes.json();
+      
+      if (!geoData || geoData.length === 0) {
+        throw new Error('Location not found');
+      }
 
-      // 1. Fetch & extrude buildings
-      const count = await loadBuildings3D(v, rect);
-      setBuildingCount(count);
+      const place = geoData[0];
+      const originLat = parseFloat(place.lat);
+      const originLon = parseFloat(place.lon);
+      
+      // Calculate a ~1km bounding box around the center point
+      // 1 deg lat = ~111km. So 0.009 deg is ~1km
+      const offsetLat = 0.009;
+      const offsetLon = 0.009 / Math.cos(originLat * Math.PI / 180);
+      
+      const s = originLat - offsetLat;
+      const n = originLat + offsetLat;
+      const w = originLon - offsetLon;
+      const e = originLon + offsetLon;
 
-      // 2. Fly the camera to a nice 45° view
-      const center = Cesium.Rectangle.center(rect);
-      const { w, h } = sizeInMetres(rect);
-      const diagonal = Math.hypot(w, h);
-      const altitude = Math.max(diagonal * 1.5, 300);
+      setStatus('⏳ Fetching OSM footprints and road networks...');
 
-      v.camera.flyTo({
-        destination: Cesium.Cartesian3.fromRadians(center.longitude, center.latitude, altitude),
-        orientation: {
-          heading: Cesium.Math.toRadians(20),
-          pitch: Cesium.Math.toRadians(-45),
-          roll: 0,
-        },
-        duration: 2,
+      // 2. Fetch data from Overpass
+      const [buildings, roads] = await Promise.all([
+        fetchBuildings(s, w, n, e),
+        fetchRoads(s, w, n, e)
+      ]);
+
+      setDioramaData({
+        buildings,
+        roads,
+        originLat,
+        originLon,
+        placeName: place.display_name
       });
-
-      setStatus(`🏢 ${count} buildings extruded. Loading road network…`);
-
-      // 3. Fetch & render roads (green lines)
-      await loadRoadNetwork(v, rect);
-
-      setStatus(`🏢 ${count} buildings · roads loaded. Click a building to inspect.`);
+      
+      setStatus(`✅ Generated 3D model with ${buildings.length.toLocaleString()} buildings.`);
     } catch (err) {
-      console.error('3D city model error:', err);
-      setStatus('⚠ Failed to load buildings. The area might be too large — try a smaller box.');
+      console.error(err);
+      setStatus(`❌ Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
-  }
-
-  // ── Button handlers ──
-  const toggleDraw = () => {
-    if (drawing) {
-      roiRef.current.cancel();
-      setStatus('ROI cancelled.');
-    } else {
-      setSelected(null);
-      setBuildingInfo(null);
-      unhighlightBuilding();
-      setDrawing(true);
-      roiRef.current.start();
-    }
   };
 
-  const clearAll = () => {
-    setSelected(null);
-    setBuildingInfo(null);
-    setBuildingCount(null);
-    unhighlightBuilding();
-    clearBuildings(viewer);
-    removeBuildings3D(viewer);
-    removeRoadNetwork(viewer);
+  // Convert raw OSM building to the info format BuildingHUD expects
+  const getBuildingInfo = (b) => {
+    if (!b) return null;
+    let height = 10;
+    if (b.tags?.height) height = parseFloat(b.tags.height) || 10;
+    else if (b.tags?.['building:levels']) height = parseInt(b.tags['building:levels']) * 3 || 10;
 
-    // Restore satellite map
-    if (viewer) {
-      viewer.imageryLayers.get(0).alpha = 1;
-    }
-    
-    setStatus('Cleared. Draw a new ROI box.');
+    const rawType = b.tags?.building || 'yes';
+    return {
+      name: b.tags?.name || 'Unnamed Building',
+      type: rawType === 'yes' ? 'Building' : rawType.charAt(0).toUpperCase() + rawType.slice(1).replace(/_/g, ' '),
+      height,
+      levels: b.tags?.['building:levels'] || null,
+      address: [b.tags?.['addr:housenumber'], b.tags?.['addr:street'], b.tags?.['addr:city']].filter(Boolean).join(', ') || null,
+      osmId: b.id,
+    };
   };
-
-  const zoomIn = () => {
-    if (!viewer) return;
-    viewer.camera.zoomIn(Math.max(viewer.camera.positionCartographic.height * 0.4, 20));
-  };
-
-  const zoomOut = () => {
-    if (!viewer) return;
-    viewer.camera.zoomOut(Math.max(viewer.camera.positionCartographic.height * 0.4, 20));
-  };
-
-  const resetView = () => {
-    if (!viewer) return;
-    viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(...INITIAL_VIEW), duration: 1.5 });
-  };
-
-  const select = useCallback((id) => setSelected(id), []);
 
   return (
-    <div className="app">
-      <div ref={containerRef} className="cesium" />
+    <div className="app" style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#eaecef' }}>
+      {/* Header Bar */}
+      <header style={{ padding: '15px 25px', background: '#ffffff', boxShadow: '0 2px 10px rgba(0,0,0,0.1)', zIndex: 10, display: 'flex', alignItems: 'center', gap: '20px' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.2rem', color: '#1f2937' }}>Bhu-Drishti 3D <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#6b7280' }}>Architectural</span></h1>
+        </div>
+        
+        <form onSubmit={searchAndGenerate} style={{ display: 'flex', gap: '10px', flex: 1, maxWidth: '500px' }}>
+          <input 
+            type="text" 
+            value={query} 
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Enter city, neighborhood, or landmark..."
+            style={{ flex: 1, padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px' }}
+          />
+          <button 
+            type="submit" 
+            disabled={loading}
+            style={{ padding: '8px 16px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: loading ? 'wait' : 'pointer' }}
+          >
+            {loading ? 'Generating...' : 'Generate 3D'}
+          </button>
+        </form>
 
-      <SearchBar viewer={viewer} onSelect={select} />
+        <div style={{ marginLeft: 'auto', fontSize: '0.9rem', color: '#4b5563' }}>
+          {status}
+        </div>
+      </header>
 
-      <aside className="sidebar">
-        <h1>Bhu-Drishti 3D</h1>
-        <p className="tagline">One ID for every floor.</p>
-
-        <button className={drawing ? 'btn btn-active' : 'btn'} onClick={toggleDraw} disabled={!viewer || loading}>
-          {drawing ? 'Cancel drawing' : loading ? 'Loading…' : 'Draw ROI Box'}
-        </button>
-        <button className="btn btn-quiet" onClick={clearAll} disabled={!viewer}>
-          Clear buildings
-        </button>
-
-        <label className="check">
-          <input type="checkbox" checked={seeThrough} onChange={(e) => setSeeThrough(e.target.checked)} />
-          See-through ground
-        </label>
-
-        {/* Building count banner */}
-        {buildingCount !== null && buildingCount >= 0 && (
-          <div className="building-count" aria-live="polite">
-            <span className="count-number">{buildingCount.toLocaleString()}</span>
-            <span className="count-label">buildings in area</span>
+      {/* Main 3D Viewport */}
+      <main style={{ flex: 1, position: 'relative' }}>
+        {dioramaData ? (
+          <CityDiorama 
+            buildings={dioramaData.buildings} 
+            roads={dioramaData.roads} 
+            originLat={dioramaData.originLat} 
+            originLon={dioramaData.originLon} 
+            selectedBuildingId={selectedBuilding?.id}
+            onSelectBuilding={setSelectedBuilding}
+          />
+        ) : (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🏙️</div>
+              <p>Search a location to build the 3D diorama</p>
+            </div>
           </div>
         )}
 
-        <p className="status" aria-live="polite">{status}</p>
-
-        <ul className="legend">
-          <li><i style={{ background: '#c8cdd3' }} />3D Building</li>
-          <li><i style={{ background: '#4ade80' }} />Road network</li>
-          <li><i style={{ background: '#facc15' }} />Selected</li>
-        </ul>
-      </aside>
-
-      {/* Floating map navigation controls */}
-      <div className="map-controls" role="toolbar" aria-label="Map navigation">
-        <button className="ctrl-btn" onClick={zoomIn} title="Zoom In" aria-label="Zoom in">+</button>
-        <button className="ctrl-btn" onClick={zoomOut} title="Zoom Out" aria-label="Zoom out">−</button>
-        <button className="ctrl-btn" onClick={resetView} title="Reset to Initial View" aria-label="Reset view">⟲</button>
-      </div>
-
-      {/* Building info card (clicked 3D building) */}
-      <BuildingHUD
-        buildingInfo={buildingInfo}
-        buildingCount={buildingCount}
-        onClose={() => { setBuildingInfo(null); unhighlightBuilding(); }}
-      />
-
-      {/* ULPIN floor card (legacy / demo) */}
-      <PropertyHUD viewer={viewer} selected={selected} onSelect={select} />
+        {/* Building Info Overlay */}
+        <BuildingHUD 
+          buildingInfo={getBuildingInfo(selectedBuilding)}
+          buildingCount={dioramaData?.buildings?.length}
+          onClose={() => setSelectedBuilding(null)}
+        />
+      </main>
     </div>
   );
 }
