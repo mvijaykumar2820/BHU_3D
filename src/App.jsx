@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import CityDiorama from './components/CityDiorama';
 import { fetchBuildings, fetchRoads } from './utils/osmFetcher';
-import BuildingHUD from './components/BuildingHUD';
 
 export default function App() {
   const [query, setQuery] = useState('Banaras Hindu University');
@@ -68,24 +67,6 @@ export default function App() {
     }
   };
 
-  // Convert raw OSM building to the info format BuildingHUD expects
-  const getBuildingInfo = (b) => {
-    if (!b) return null;
-    let height = 10;
-    if (b.tags?.height) height = parseFloat(b.tags.height) || 10;
-    else if (b.tags?.['building:levels']) height = parseInt(b.tags['building:levels']) * 3 || 10;
-
-    const rawType = b.tags?.building || 'yes';
-    return {
-      name: b.tags?.name || 'Unnamed Building',
-      type: rawType === 'yes' ? 'Building' : rawType.charAt(0).toUpperCase() + rawType.slice(1).replace(/_/g, ' '),
-      height,
-      levels: b.tags?.['building:levels'] || null,
-      address: [b.tags?.['addr:housenumber'], b.tags?.['addr:street'], b.tags?.['addr:city']].filter(Boolean).join(', ') || null,
-      osmId: b.id,
-    };
-  };
-
   return (
     <div className="app" style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#eaecef' }}>
       {/* Header Bar */}
@@ -135,13 +116,6 @@ export default function App() {
             </div>
           </div>
         )}
-
-        {/* Building Info Overlay */}
-        <BuildingHUD 
-          buildingInfo={getBuildingInfo(selectedBuilding)}
-          buildingCount={dioramaData?.buildings?.length}
-          onClose={() => setSelectedBuilding(null)}
-        />
       </main>
     </div>
   );
