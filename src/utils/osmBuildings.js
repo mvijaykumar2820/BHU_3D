@@ -1,86 +1,127 @@
 /**
- * Utilities for loading Cesium OSM Buildings (Ion #96188),
- * clipping to a Region of Interest, and querying OpenStreetMap
- * for building counts via the Overpass API.
+ * Fetch real building footprints and road networks from OpenStreetMap
+ * via the Overpass API, then render them as extruded 3D polygon blocks
+ * and green road lines in Cesium — producing a clean "city model" look.
  */
 import * as Cesium from 'cesium';
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
-let tilesetRef = null;
-let highlightedFeature = null;
-let originalColor = null;
+const BUILDING_COLOR = Cesium.Color.fromCssColorString('#c8cdd3').withAlpha(0.95);
+const BUILDING_OUTLINE = Cesium.Color.fromCssColorString('#9ca3af').withAlpha(0.5);
+const ROAD_COLOR = Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.85);
 const HIGHLIGHT = Cesium.Color.YELLOW.withAlpha(0.9);
 
-/* ───── Tileset management ───── */
+let buildingDS = null;
+let roadDS = null;
+let highlightedEntity = null;
+let originalMaterial = null;
+
+/* ───── 3D Buildings from OSM footprints ───── */
 
 /**
- * Load the global OSM Buildings 3D tileset and clip it to `rect`.
- * Removes any previously loaded tileset first.
- * @param {Cesium.Viewer} viewer
- * @param {Cesium.Rectangle} rect  — bounding rectangle in radians
- * @returns {Promise<Cesium.Cesium3DTileset>}
+ * Fetch building footprints from OSM and extrude each one into a 3D block.
+ * Returns the number of buildings created.
  */
-export async function loadOsmBuildings(viewer, rect) {
-  removeOsmBuildings(viewer);
+export async function loadBuildings3D(viewer, rect) {
+  removeBuildings3D(viewer);
 
-  const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(96188);
-  viewer.scene.primitives.add(tileset);
-
-  // Clip: show only buildings INSIDE the ROI polygon
-  const { west, south, east, north } = rect;
-  const positions = Cesium.Cartesian3.fromRadiansArray([
-    west, south,
-    east, south,
-    east, north,
-    west, north,
-  ]);
-
-  tileset.clippingPolygons = new Cesium.ClippingPolygonCollection({
-    polygons: [new Cesium.ClippingPolygon({ positions })],
-    inverse: true, // clip outside → keep inside
-  });
-
-  // Simple colour — the 3D geometry already conveys height visually
-  tileset.style = new Cesium.Cesium3DTileStyle({
-    color: "color('#22d3ee', 0.8)",
-  });
-
-  tilesetRef = tileset;
-  return tileset;
-}
-
-/** Remove the current OSM Buildings tileset. */
-export function removeOsmBuildings(viewer) {
-  unhighlightBuilding();
-  if (tilesetRef && !tilesetRef.isDestroyed()) {
-    viewer.scene.primitives.remove(tilesetRef);
-  }
-  tilesetRef = null;
-}
-
-/** @returns {Cesium.Cesium3DTileset | null} */
-export function getOsmTileset() {
-  return tilesetRef;
-}
-
-/* ───── Overpass building count ───── */
-
-/**
- * Query the Overpass API for the number of buildings within `rect`.
- * Returns the count (integer) or −1 on error.
- */
-export async function countBuildingsInArea(rect) {
   const s = Cesium.Math.toDegrees(rect.south);
   const w = Cesium.Math.toDegrees(rect.west);
   const n = Cesium.Math.toDegrees(rect.north);
   const e = Cesium.Math.toDegrees(rect.east);
 
   const query =
-    `[out:json][timeout:30];` +
-    `(way["building"](${s},${w},${n},${e});` +
-    `relation["building"](${s},${w},${n},${e}););` +
-    `out count;`;
+    `[out:json][timeout:60];` +
+    `way["building"](${s},${w},${n},${e});` +
+    `out body geom;`;
+
+  const res = await fetch(OVERPASS_URL, {
+    method: 'POST',
+    body: `data=${encodeURIComponent(query)}`,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+  const data = await res.json();
+
+  buildingDS = new Cesium.CustomDataSource('buildings-3d');
+  viewer.dataSources.add(buildingDS);
+
+  let count = 0;
+  for (const el of data.elements) {
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 3) continue;
+
+    // Determine building height from OSM tags
+    let height = 10; // default 10 m
+    if (el.tags?.height) {
+      const parsed = parseFloat(String(el.tags.height));
+      if (!isNaN(parsed) && parsed > 0) height = parsed;
+    } else if (el.tags?.['building:levels']) {
+      const lvl = parseInt(el.tags['building:levels'], 10);
+      if (!isNaN(lvl) && lvl > 0) height = lvl * 3;
+    }
+
+    const positions = el.geometry.map((pt) =>
+      Cesium.Cartesian3.fromDegrees(pt.lon, pt.lat),
+    );
+
+    buildingDS.entities.add({
+      name: el.tags?.name || 'Building',
+      properties: {
+        osmId: el.id,
+        type: el.tags?.building || 'yes',
+        height,
+        levels: el.tags?.['building:levels'] || null,
+        name: el.tags?.name || null,
+        address:
+          [el.tags?.['addr:housenumber'], el.tags?.['addr:street'], el.tags?.['addr:city']]
+            .filter(Boolean)
+            .join(', ') || null,
+      },
+      polygon: {
+        hierarchy: new Cesium.PolygonHierarchy(positions),
+        height: 0,
+        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+        extrudedHeight: height,
+        extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+        material: BUILDING_COLOR,
+        outline: true,
+        outlineColor: BUILDING_OUTLINE,
+        closeTop: true,
+        closeBottom: true,
+      },
+    });
+    count++;
+  }
+
+  return count;
+}
+
+export function removeBuildings3D(viewer) {
+  unhighlightBuilding();
+  if (buildingDS) {
+    viewer.dataSources.remove(buildingDS, true);
+    buildingDS = null;
+  }
+}
+
+/* ───── Green road network ───── */
+
+/**
+ * Fetch road network from OSM and render as green ground-clamped lines.
+ */
+export async function loadRoadNetwork(viewer, rect) {
+  removeRoadNetwork(viewer);
+
+  const s = Cesium.Math.toDegrees(rect.south);
+  const w = Cesium.Math.toDegrees(rect.west);
+  const n = Cesium.Math.toDegrees(rect.north);
+  const e = Cesium.Math.toDegrees(rect.east);
+
+  const query =
+    `[out:json][timeout:60];` +
+    `way["highway"](${s},${w},${n},${e});` +
+    `out geom;`;
 
   try {
     const res = await fetch(OVERPASS_URL, {
@@ -88,59 +129,95 @@ export async function countBuildingsInArea(rect) {
       body: `data=${encodeURIComponent(query)}`,
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) return;
     const data = await res.json();
-    return parseInt(data.elements?.[0]?.tags?.total ?? '0', 10);
+
+    roadDS = new Cesium.CustomDataSource('roads');
+    viewer.dataSources.add(roadDS);
+
+    for (const el of data.elements) {
+      if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
+
+      const positions = el.geometry.map((pt) =>
+        Cesium.Cartesian3.fromDegrees(pt.lon, pt.lat),
+      );
+
+      const hw = el.tags?.highway || '';
+      let width = 1.5;
+      if (['primary', 'trunk', 'motorway'].includes(hw)) width = 4;
+      else if (['secondary', 'tertiary'].includes(hw)) width = 3;
+      else if (['residential', 'living_street', 'unclassified'].includes(hw)) width = 2;
+
+      roadDS.entities.add({
+        polyline: {
+          positions,
+          width,
+          material: ROAD_COLOR,
+          clampToGround: true,
+        },
+      });
+    }
   } catch (err) {
-    console.warn('Overpass count error:', err);
-    return -1;
+    console.warn('Road network load error:', err);
   }
 }
 
-/* ───── Feature picking helpers ───── */
+export function removeRoadNetwork(viewer) {
+  if (roadDS) {
+    viewer.dataSources.remove(roadDS, true);
+    roadDS = null;
+  }
+}
+
+/* ───── Feature picking ───── */
 
 /**
- * Extract human-readable info from a Cesium3DTileFeature.
+ * Extract building info from a picked Cesium Entity.
  */
-export function getBuildingInfo(feature) {
-  if (!feature) return null;
-  const g = (k) => {
-    try { return feature.getProperty(k); } catch { return undefined; }
-  };
+export function getBuildingInfoFromEntity(entity) {
+  if (!entity?.properties) return null;
 
-  return {
-    name: g('name') || 'Unnamed Building',
-    type: prettifyType(g('building') || 'building'),
-    height: parseFloat(g('height') || g('render_height') || 0) || null,
-    levels: g('building:levels') || null,
-    address:
-      [g('addr:housenumber'), g('addr:street'), g('addr:city')]
-        .filter(Boolean)
-        .join(', ') || null,
-  };
-}
-
-function prettifyType(raw) {
-  if (!raw || raw === 'yes') return 'Building';
-  return raw.charAt(0).toUpperCase() + raw.slice(1).replace(/_/g, ' ');
-}
-
-/** Highlight a feature yellow; restore any previous highlight. */
-export function highlightBuilding(feature) {
-  unhighlightBuilding();
-  if (!(feature instanceof Cesium.Cesium3DTileFeature)) return;
-  originalColor = Cesium.Color.clone(feature.color);
-  feature.color = HIGHLIGHT;
-  highlightedFeature = feature;
-}
-
-/** Restore the previously highlighted feature's colour. */
-export function unhighlightBuilding() {
-  if (highlightedFeature) {
+  const get = (key) => {
     try {
-      highlightedFeature.color = originalColor ?? Cesium.Color.WHITE;
-    } catch { /* feature may be destroyed */ }
-    highlightedFeature = null;
-    originalColor = null;
+      const prop = entity.properties[key];
+      if (prop === undefined || prop === null) return undefined;
+      if (typeof prop.getValue === 'function') return prop.getValue(Cesium.JulianDate.now());
+      return prop;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const osmId = get('osmId');
+  if (!osmId) return null; // not a building entity
+
+  const rawType = get('type') || 'building';
+  return {
+    name: get('name') || 'Unnamed Building',
+    type: rawType === 'yes' ? 'Building' : rawType.charAt(0).toUpperCase() + rawType.slice(1).replace(/_/g, ' '),
+    height: get('height') || null,
+    levels: get('levels') || null,
+    address: get('address') || null,
+    osmId,
+  };
+}
+
+/** Highlight a building entity yellow. */
+export function highlightBuilding(entity) {
+  unhighlightBuilding();
+  if (!entity?.polygon) return;
+  originalMaterial = BUILDING_COLOR;
+  entity.polygon.material = HIGHLIGHT;
+  highlightedEntity = entity;
+}
+
+/** Restore the previous building's colour. */
+export function unhighlightBuilding() {
+  if (highlightedEntity?.polygon) {
+    try {
+      highlightedEntity.polygon.material = originalMaterial ?? BUILDING_COLOR;
+    } catch { /* entity may be destroyed */ }
   }
+  highlightedEntity = null;
+  originalMaterial = null;
 }

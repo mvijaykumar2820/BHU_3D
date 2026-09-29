@@ -5,19 +5,20 @@ import PropertyHUD from './components/PropertyHUD';
 import BuildingHUD from './components/BuildingHUD';
 import SearchBar from './components/SearchBar';
 import {
-  loadOsmBuildings,
-  removeOsmBuildings,
-  countBuildingsInArea,
-  getBuildingInfo,
+  loadBuildings3D,
+  removeBuildings3D,
+  loadRoadNetwork,
+  removeRoadNetwork,
+  getBuildingInfoFromEntity,
   highlightBuilding,
   unhighlightBuilding,
-  getOsmTileset,
 } from './utils/osmBuildings';
 
-const ESRI_IMAGERY =
-  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+// Light base map for clean city-model look
+const LIGHT_MAP =
+  'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
 
-// Starting view (India). Change to your demo site: [lon, lat, height in metres].
+// Starting view (India)
 const INITIAL_VIEW = [78.9, 22.5, 3_500_000];
 
 export default function App() {
@@ -26,10 +27,10 @@ export default function App() {
   const [viewer, setViewer] = useState(null);
   const [selected, setSelected] = useState(null);
   const [drawing, setDrawing] = useState(false);
-  const [seeThrough, setSeeThrough] = useState(true);
+  const [seeThrough, setSeeThrough] = useState(false);
   const [status, setStatus] = useState('Zoom to a site, then draw an ROI box.');
 
-  // OSM Buildings state
+  // 3D city-model state
   const [buildingCount, setBuildingCount] = useState(null);
   const [buildingInfo, setBuildingInfo] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -42,9 +43,9 @@ export default function App() {
     const v = new Cesium.Viewer(containerRef.current, {
       baseLayer: new Cesium.ImageryLayer(
         new Cesium.UrlTemplateImageryProvider({
-          url: ESRI_IMAGERY,
+          url: LIGHT_MAP,
           maximumLevel: 19,
-          credit: 'Esri, Maxar, Earthstar Geographics',
+          credit: '© CartoDB © OpenStreetMap contributors',
         }),
       ),
       terrain: token ? Cesium.Terrain.fromWorldTerrain() : undefined,
@@ -61,10 +62,18 @@ export default function App() {
       selectionIndicator: false,
     });
 
-    v.scene.globe.depthTestAgainstTerrain = true;
-    v.scene.globe.translucency.frontFaceAlpha = 0.6;
+    // Clean scene — light sky, no atmosphere haze
+    v.scene.skyBox.show = false;
+    v.scene.sun.show = false;
+    v.scene.moon.show = false;
+    v.scene.skyAtmosphere.show = false;
+    v.scene.fog.enabled = false;
+    v.scene.globe.showGroundAtmosphere = false;
+    v.scene.backgroundColor = Cesium.Color.fromCssColorString('#eaecef');
 
-    // Camera controller configuration
+    v.scene.globe.depthTestAgainstTerrain = true;
+
+    // Camera controller
     v.scene.screenSpaceCameraController.enableCollisionDetection = false;
     v.scene.screenSpaceCameraController.minimumZoomDistance = 2;
     v.scene.screenSpaceCameraController.zoomEventTypes = [
@@ -96,7 +105,8 @@ export default function App() {
       container?.removeEventListener('wheel', handleWheel);
       roiRef.current?.cancel();
       clearBuildings(v);
-      removeOsmBuildings(v);
+      removeBuildings3D(v);
+      removeRoadNetwork(v);
       v.destroy();
       setViewer(null);
     };
@@ -104,34 +114,37 @@ export default function App() {
 
   // ── Toggle see-through ground ──
   useEffect(() => {
-    if (viewer) viewer.scene.globe.translucency.enabled = seeThrough;
+    if (viewer) {
+      viewer.scene.globe.translucency.enabled = seeThrough;
+      viewer.scene.globe.translucency.frontFaceAlpha = 0.4;
+    }
   }, [viewer, seeThrough]);
 
-  // ── 3D Tileset feature picking (LEFT_CLICK) ──
+  // ── Click handler: pick 3D building entities ──
   useEffect(() => {
     if (!viewer) return;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
     handler.setInputAction(({ position }) => {
-      const tileset = getOsmTileset();
-      if (!tileset) return; // no OSM buildings loaded
-
       const picked = viewer.scene.pick(position);
-      if (picked instanceof Cesium.Cesium3DTileFeature) {
-        const info = getBuildingInfo(picked);
-        highlightBuilding(picked);
-        setBuildingInfo(info);
-        setSelected(null); // clear any ULPIN selection
-      } else {
-        unhighlightBuilding();
-        setBuildingInfo(null);
+      if (Cesium.defined(picked) && picked.id instanceof Cesium.Entity) {
+        const entity = picked.id;
+        const info = getBuildingInfoFromEntity(entity);
+        if (info) {
+          highlightBuilding(entity);
+          setBuildingInfo(info);
+          setSelected(null);
+          return;
+        }
       }
+      unhighlightBuilding();
+      setBuildingInfo(null);
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
     return () => handler.destroy();
   }, [viewer]);
 
-  // ── Handle ROI box completion ──
+  // ── Handle ROI box completion → build the 3D city model ──
   async function handleRoiComplete(v, rect) {
     if (!v || v.isDestroyed()) return;
 
@@ -139,13 +152,14 @@ export default function App() {
     setBuildingInfo(null);
     setBuildingCount(null);
     setSelected(null);
-    setStatus('Loading 3D buildings in the selected area…');
+    setStatus('⏳ Fetching building footprints from OpenStreetMap…');
 
     try {
-      // 1. Load the Cesium OSM Buildings tileset clipped to the ROI
-      await loadOsmBuildings(v, rect);
+      // 1. Fetch & extrude buildings
+      const count = await loadBuildings3D(v, rect);
+      setBuildingCount(count);
 
-      // 2. Fly the camera to the selected area at a nice angle
+      // 2. Fly the camera to a nice 45° view
       const center = Cesium.Rectangle.center(rect);
       const { w, h } = sizeInMetres(rect);
       const diagonal = Math.hypot(w, h);
@@ -161,20 +175,15 @@ export default function App() {
         duration: 2,
       });
 
-      setStatus('3D buildings loaded! Counting buildings via OSM…');
+      setStatus(`🏢 ${count} buildings extruded. Loading road network…`);
 
-      // 3. Count buildings via Overpass API (runs in parallel with the camera fly)
-      const count = await countBuildingsInArea(rect);
-      setBuildingCount(count);
+      // 3. Fetch & render roads (green lines)
+      await loadRoadNetwork(v, rect);
 
-      if (count >= 0) {
-        setStatus(`🏢 ${count} buildings found in the selected area. Click a building to inspect.`);
-      } else {
-        setStatus('3D buildings loaded! (Could not reach OSM for count.) Click a building to inspect.');
-      }
+      setStatus(`🏢 ${count} buildings · roads loaded. Click a building to inspect.`);
     } catch (err) {
-      console.error('Failed to load OSM Buildings:', err);
-      setStatus('⚠ Failed to load 3D buildings. Check your Cesium Ion token.');
+      console.error('3D city model error:', err);
+      setStatus('⚠ Failed to load buildings. The area might be too large — try a smaller box.');
     } finally {
       setLoading(false);
     }
@@ -200,7 +209,8 @@ export default function App() {
     setBuildingCount(null);
     unhighlightBuilding();
     clearBuildings(viewer);
-    removeOsmBuildings(viewer);
+    removeBuildings3D(viewer);
+    removeRoadNetwork(viewer);
     setStatus('Cleared. Draw a new ROI box.');
   };
 
@@ -254,7 +264,8 @@ export default function App() {
         <p className="status" aria-live="polite">{status}</p>
 
         <ul className="legend">
-          <li><i style={{ background: '#22d3ee' }} />3D Building</li>
+          <li><i style={{ background: '#c8cdd3' }} />3D Building</li>
+          <li><i style={{ background: '#4ade80' }} />Road network</li>
           <li><i style={{ background: '#facc15' }} />Selected</li>
         </ul>
       </aside>
@@ -266,7 +277,7 @@ export default function App() {
         <button className="ctrl-btn" onClick={resetView} title="Reset to Initial View" aria-label="Reset view">⟲</button>
       </div>
 
-      {/* OSM Building info card (when a 3D building is clicked) */}
+      {/* Building info card (clicked 3D building) */}
       <BuildingHUD
         buildingInfo={buildingInfo}
         buildingCount={buildingCount}
