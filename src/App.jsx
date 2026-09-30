@@ -49,6 +49,12 @@ export default function App() {
             Bhu-Drishti 3D <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#6b7280' }}>Architectural</span>
           </h1>
         </div>
+
+        {status && !loading && (
+          <div style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '14px', background: '#fef2f2', padding: '6px 12px', borderRadius: '6px', border: '1px solid #fca5a5' }}>
+            {status}
+          </div>
+        )}
         
         {dioramaData && (
           <button 

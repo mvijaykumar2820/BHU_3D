@@ -76,7 +76,7 @@ function BuildingMesh({ building, originLat, originLon }) {
     return { geom, height };
   }, [building, originLat, originLon]);
 
-  if (isHidden) return null;
+  if (isHidden || !building.geometry || building.geometry.length === 0) return null;
 
   const baseColor = getBuildingColor(building.tags);
   const displayColor = isSelected ? "#38b2ac" : hovered ? "#d4c8b8" : baseColor;
@@ -85,6 +85,12 @@ function BuildingMesh({ building, originLat, originLon }) {
   const centerLat = building.geometry[0].lat;
   const centerLon = building.geometry[0].lon;
   const floorsCount = building.tags?.['building:levels'] ? parseInt(building.tags['building:levels']) : Math.max(1, Math.floor(geometry.height / 3));
+
+  const bboxCenter = geometry.geom.boundingBox ? [
+    (geometry.geom.boundingBox.min.x + geometry.geom.boundingBox.max.x) / 2, 
+    geometry.height + 2, 
+    (geometry.geom.boundingBox.min.z + geometry.geom.boundingBox.max.z) / 2
+  ] : [0, geometry.height + 2, 0];
 
   const openAnnotationEditor = () => {
     setAnnotTitle(annotation?.title ?? "");
@@ -96,11 +102,7 @@ function BuildingMesh({ building, originLat, originLon }) {
   return (
     <group>
       {annotation && (
-        <group position={[
-          (geometry.geom.boundingBox.min.x + geometry.geom.boundingBox.max.x)/2, 
-          geometry.height + 2, 
-          (geometry.geom.boundingBox.min.z + geometry.geom.boundingBox.max.z)/2
-        ]}>
+        <group position={bboxCenter}>
           <mesh position={[0, 4, 0]}>
             <cylinderGeometry args={[1, 1, 8, 12]} />
             <meshBasicMaterial color={ANNOTATION_COLORS[annotation.color]} transparent opacity={0.5} />
@@ -201,9 +203,11 @@ function RoadLines({ roads, originLat, originLon }) {
   const lineSegments = useMemo(() => {
     const points = [];
     roads.forEach(road => {
+      if (!road || !road.geometry || road.geometry.length < 2) return;
       for (let i = 0; i < road.geometry.length - 1; i++) {
         const p1 = road.geometry[i];
         const p2 = road.geometry[i+1];
+        if (!p1 || !p2 || p1.lat === undefined || p2.lat === undefined) continue;
         const m1 = latLonToMeters(p1.lat, p1.lon, originLat, originLon);
         const m2 = latLonToMeters(p2.lat, p2.lon, originLat, originLon);
         points.push(new THREE.Vector3(m1.x, 0.5, m1.z), new THREE.Vector3(m2.x, 0.5, m2.z));
