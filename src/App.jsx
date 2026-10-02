@@ -7,16 +7,70 @@ export default function App() {
   const [step, setStep] = useState(0); // 0 = map, 1 = 3D
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [progress, setProgress] = useState('');
 
   const appendAreas = useAreaStore((s) => s.appendAreas);
   const setCenter = useAreaStore((s) => s.setCenter);
   const hiddenIds = useHiddenStore((s) => s.hiddenIds);
   const showAll = useHiddenStore((s) => s.showAll);
 
+  // Overpass mirrors — we rotate between them to avoid rate limits
+  const OVERPASS_SERVERS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  ];
+
+  // Fetch a single tile from Overpass, with server fallback
+  const fetchTile = async (s, w, n, e, serverIdx = 0) => {
+    const server = OVERPASS_SERVERS[serverIdx % OVERPASS_SERVERS.length];
+    const query = `[out:json][timeout:90];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
+
+    try {
+      const response = await fetch(server, {
+        method: "POST",
+        body: `data=${encodeURIComponent(query)}`,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
+      if (!response.ok) {
+        // Try next server
+        if (serverIdx < OVERPASS_SERVERS.length - 1) {
+          return fetchTile(s, w, n, e, serverIdx + 1);
+        }
+        throw new Error(`All servers failed (HTTP ${response.status})`);
+      }
+      return await response.json();
+    } catch (err) {
+      if (serverIdx < OVERPASS_SERVERS.length - 1) {
+        return fetchTile(s, w, n, e, serverIdx + 1);
+      }
+      throw err;
+    }
+  };
+
+  // Split a big bounding box into a grid of smaller tiles
+  const splitIntoTiles = (s, w, n, e) => {
+    // Each tile should be roughly 0.01 degrees (~1.1km)
+    const TILE_SIZE = 0.01;
+    const tiles = [];
+    for (let lat = s; lat < n; lat += TILE_SIZE) {
+      for (let lon = w; lon < e; lon += TILE_SIZE) {
+        tiles.push({
+          s: lat,
+          w: lon,
+          n: Math.min(lat + TILE_SIZE, n),
+          e: Math.min(lon + TILE_SIZE, e),
+        });
+      }
+    }
+    return tiles;
+  };
+
   const handleGenerate = async (bounds) => {
     if (!bounds) return;
     setLoading(true);
     setError('');
+    setProgress('');
 
     try {
       const { s, w, n, e, centerLat, centerLon } = bounds;
@@ -27,20 +81,53 @@ export default function App() {
         { lat: s, lng: w },
       ]);
 
-      // Fetch buildings from Overpass (same query as VPMS — includes relations)
-      const query = `[out:json][timeout:25];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
+      // Calculate area size in degrees
+      const latSpan = n - s;
+      const lonSpan = e - w;
+      const isLarge = (latSpan + lonSpan) > 0.02; // > ~2km total
 
-      const response = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST",
-        body: query,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
+      let allBuildings = [];
 
-      if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
-      const data = await response.json();
+      if (isLarge) {
+        // CHUNKED MODE: split into tiles and fetch in parallel batches
+        const tiles = splitIntoTiles(s, w, n, e);
+        const BATCH_SIZE = 4; // Fetch 4 tiles at a time to not overwhelm the API
+        let completed = 0;
+
+        for (let i = 0; i < tiles.length; i += BATCH_SIZE) {
+          const batch = tiles.slice(i, i + BATCH_SIZE);
+          setProgress(`Fetching tile ${completed + 1}–${Math.min(completed + BATCH_SIZE, tiles.length)} of ${tiles.length}...`);
+
+          const results = await Promise.allSettled(
+            batch.map((t, idx) => fetchTile(t.s, t.w, t.n, t.e, idx % OVERPASS_SERVERS.length))
+          );
+
+          for (const result of results) {
+            if (result.status === 'fulfilled' && result.value?.elements) {
+              allBuildings.push(...result.value.elements);
+            }
+          }
+          completed += batch.length;
+        }
+      } else {
+        // SIMPLE MODE: single fetch for small areas
+        setProgress('Fetching buildings...');
+        const data = await fetchTile(s, w, n, e);
+        allBuildings = data.elements || [];
+      }
+
+      // Deduplicate by OSM id (tiles may overlap at edges)
+      const seen = new Set();
+      const unique = [];
+      for (const el of allBuildings) {
+        if (!seen.has(el.id)) {
+          seen.add(el.id);
+          unique.push(el);
+        }
+      }
 
       // Convert to VPMS format (lat/lng not lat/lon)
-      const blds = data.elements.map((element) => ({
+      const blds = unique.map((element) => ({
         id: element.id,
         tags: element.tags,
         geometry: element.geometry
@@ -48,6 +135,7 @@ export default function App() {
           : undefined,
       }));
 
+      setProgress(`✅ Loaded ${blds.length.toLocaleString()} buildings. Rendering 3D...`);
       appendAreas(blds);
       setStep(1);
     } catch (err) {
@@ -55,6 +143,7 @@ export default function App() {
       setError(`Failed: ${err.message}. Try a smaller area or wait a minute.`);
     } finally {
       setLoading(false);
+      setProgress('');
     }
   };
 
@@ -96,7 +185,7 @@ export default function App() {
                 zIndex: 2000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
               }}>
                 <div style={{ fontSize: '40px', marginBottom: '20px', animation: 'spin 1s linear infinite' }}>⏳</div>
-                <h2 style={{ color: '#1f2937' }}>Fetching OSM footprints and roads...</h2>
+                <h2 style={{ color: '#1f2937' }}>{progress || 'Fetching OSM footprints and roads...'}</h2>
                 <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
               </div>
             )}
