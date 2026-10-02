@@ -47,24 +47,48 @@ function getBuildingColor(tags) {
 }
 
 // ─── ULPIN ───
-function generateBaseUlpin(lat, lng) {
-  const latPart = Math.round((lat + 90) * 100000).toString().padStart(7, "0");
-  const lngPart = Math.round((lng + 180) * 100000).toString().padStart(7, "0");
-  return `${latPart}${lngPart}`;
+// ─── 3D-ULPIN Generator (Hackathon Spec) ───
+// Format: PNIU14 + Domain (A/S/B/U) + Floor (Base32) + Checksum
+const BASE32_CHARS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function generateChecksum(baseStr) {
+  // Simple cyclic redundancy checksum mock for the prototype
+  let sum = 0;
+  for (let i = 0; i < baseStr.length; i++) {
+    sum += baseStr.charCodeAt(i);
+  }
+  return BASE32_CHARS[sum % 32];
 }
 
-function generateFloorUlpin(baseUlpin, floor) {
-  return `${baseUlpin}-F${floor.toString().padStart(2, "0")}`;
+function generate3DUlpin(lat, lng, domain, floorIndex) {
+  // PNIU14 (Base Surface Centroid)
+  const latPart = Math.abs(Math.round((lat + 90) * 100000)).toString().padStart(7, "0");
+  const lngPart = Math.abs(Math.round((lng + 180) * 100000)).toString().padStart(7, "0");
+  const base14 = `${latPart}${lngPart}`;
+
+  // Domain (A=Above, S=Surface, B=Basement, U=Utility)
+  const domainChar = domain.charAt(0).toUpperCase();
+
+  // Vertical Elevation Index (Z_encoded - 2 chars Base32)
+  const zNorm = floorIndex + 10;
+  const zEncoded = zNorm.toString(32).toUpperCase().padStart(2, "0");
+
+  const partialUlpin = `${base14}${domainChar}${zEncoded}`;
+  const checksum = generateChecksum(partialUlpin);
+
+  return `${partialUlpin}${checksum}`;
 }
 
-// ─── Building Component (exactly like VPMS) ───
+// ─── Building Component with Floor Slicing ───
 function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, rawCenter, floorCount }) {
   const [hovered, setHovered] = useState(false);
   const [hoverPos, setHoverPos] = useState(null);
+  const [hoveredFloor, setHoveredFloor] = useState(null);
 
   const selectedBuildingId = useHiddenStore((s) => s.selectedBuildingId);
   const selectBuilding = useHiddenStore((s) => s.selectBuilding);
   const toggleHidden = useHiddenStore((s) => s.toggleHidden);
+  
   const annotation = useAnnotationStore((s) => s.annotations[buildingId]);
   const upsertAnnotation = useAnnotationStore((s) => s.upsertAnnotation);
   const removeAnnotation = useAnnotationStore((s) => s.removeAnnotation);
@@ -76,10 +100,9 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
   const [annotNotes, setAnnotNotes] = useState("");
   const [annotColor, setAnnotColor] = useState("red");
 
-  const baseUlpin = generateBaseUlpin(rawCenter.lat, rawCenter.lng);
-
   const closePopup = () => {
     setHovered(false);
+    setHoveredFloor(null);
     setShowAnnotationForm(false);
     selectBuilding(null);
   };
@@ -96,8 +119,12 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
 
   const hasAnyData = tags?.name || (tags?.building && tags.building !== "yes") || tags?.height || tags?.["building:levels"] || tags?.amenity;
 
+  // Floor height calculation
+  const totalHeight = extrudeSettings.depth;
+  const floorHeight = totalHeight / floorCount;
+
   return (
-    <>
+    <group>
       {/* Annotation marker beacon */}
       {annotation && (
         <group position={markerPosition}>
@@ -122,23 +149,52 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
         </group>
       )}
 
-      <mesh
-        onPointerOver={(e) => { setHovered(true); e.stopPropagation(); }}
-        onPointerOut={(e) => { setHovered(false); e.stopPropagation(); }}
-        onPointerMove={(e) => { setHoverPos(e.point.clone()); e.stopPropagation(); }}
-        onClick={(e) => { selectBuilding(selected ? null : buildingId); e.stopPropagation(); }}
-        onContextMenu={(e) => {
-          e.nativeEvent.preventDefault();
-          setHoverPos(e.point.clone());
-          selectBuilding(buildingId);
-          openAnnotationEditor();
-          e.stopPropagation();
-        }}
-        rotation={[-Math.PI / 2, 0, 0]}
-        userData={{ exportToGLB: true }}
-      >
-        <extrudeGeometry args={[shape, extrudeSettings]} />
-        <meshStandardMaterial color={displayColor} />
+      {selected ? (
+        // SLICED MODE: Render individual floors when selected
+        Array.from({ length: floorCount }).map((_, i) => {
+          const isHoveredFloor = hoveredFloor === i;
+          const floorY = i * floorHeight;
+          const gap = 0.15; // Gap between sliced floors
+          
+          return (
+            <mesh
+              key={i}
+              position={[0, floorY + (i * gap), 0]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              onPointerOver={(e) => { setHoveredFloor(i); e.stopPropagation(); }}
+              onPointerOut={(e) => { setHoveredFloor(null); e.stopPropagation(); }}
+              onClick={(e) => { selectBuilding(null); e.stopPropagation(); }}
+            >
+              <extrudeGeometry args={[shape, { steps: 1, depth: floorHeight, bevelEnabled: false }]} />
+              <meshStandardMaterial 
+                color={isHoveredFloor ? "#fbbf24" : SELECTED_COLOR} 
+                transparent 
+                opacity={isHoveredFloor ? 1 : 0.85} 
+              />
+            </mesh>
+          );
+        })
+      ) : (
+        // SOLID MODE: Render normal building block
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          onPointerOver={(e) => { setHovered(true); e.stopPropagation(); }}
+          onPointerOut={(e) => { setHovered(false); e.stopPropagation(); }}
+          onPointerMove={(e) => { setHoverPos(e.point.clone()); e.stopPropagation(); }}
+          onClick={(e) => { selectBuilding(buildingId); e.stopPropagation(); }}
+          onContextMenu={(e) => {
+            e.nativeEvent.preventDefault();
+            setHoverPos(e.point.clone());
+            selectBuilding(buildingId);
+            openAnnotationEditor();
+            e.stopPropagation();
+          }}
+          userData={{ exportToGLB: true }}
+        >
+          <extrudeGeometry args={[shape, extrudeSettings]} />
+          <meshStandardMaterial color={displayColor} />
+        </mesh>
+      )}
 
         {/* Floating HUD */}
         {(hovered || selected) && hoverPos && (
@@ -219,16 +275,46 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
                 <div style={{ color: "#8f8f96", fontSize: "12px", textAlign: "center", padding: "6px 0" }}>No data available</div>
               )}
 
-              {/* Floor ULPINs */}
+              {/* 3D-ULPIN Cadastral Registry (Hackathon Spec) */}
               <div style={{ margin: "10px 0 8px", borderTop: "1px solid rgba(0, 0, 0, 0.08)", paddingTop: "8px" }}>
-                <div style={{ fontWeight: "500", marginBottom: "4px", color: "#5f6368" }}>Floor IDs</div>
-                <div style={{ maxHeight: "120px", overflowY: "auto" }}>
-                  {Array.from({ length: floorCount }).map((_, i) => (
-                    <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "11px", fontFamily: "monospace", margin: "2px 0" }}>
-                      <span>Floor {i + 1}</span>
-                      <span>{generateFloorUlpin(baseUlpin, i + 1)}</span>
-                    </div>
-                  ))}
+                <div style={{ fontWeight: "700", marginBottom: "6px", color: "#374151", fontSize: "12px", display: "flex", justifyContent: "space-between" }}>
+                  <span>Volumetric Cadastre</span>
+                  <span style={{ color: "#2563eb" }}>{floorCount} Units</span>
+                </div>
+                <div style={{ maxHeight: "160px", overflowY: "auto", paddingRight: "4px" }}>
+                  {Array.from({ length: floorCount }).map((_, i) => {
+                    // Generate mock data for the hackathon prototype
+                    const isHovered = hoveredFloor === i;
+                    const ulpin = generate3DUlpin(rawCenter.lat, rawCenter.lng, "A", i + 1);
+                    const mockOwners = ["Ramesh Kumar", "Suresh Reddy", "Priya Sharma", "Abdul Khan", "Neha Gupta", "Vikram Singh", "Anjali Desai"];
+                    const owner = mockOwners[(buildingId + i) % mockOwners.length];
+                    const unitName = `Unit ${i + 1}01`;
+
+                    return (
+                      <div 
+                        key={i} 
+                        onPointerEnter={() => setHoveredFloor(i)}
+                        onPointerLeave={() => setHoveredFloor(null)}
+                        style={{ 
+                          padding: "6px 8px", 
+                          margin: "4px 0", 
+                          backgroundColor: isHovered ? "rgba(251, 191, 36, 0.15)" : "rgba(243, 244, 246, 0.6)", 
+                          borderLeft: isHovered ? "3px solid #fbbf24" : "3px solid #e5e7eb",
+                          borderRadius: "0 4px 4px 0",
+                          transition: "all 0.15s ease",
+                          cursor: "pointer"
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
+                          <span style={{ fontWeight: "600", fontSize: "11px", color: "#374151" }}>{unitName} (Floor {i + 1})</span>
+                          <span style={{ fontSize: "10px", color: "#6b7280" }}>{owner}</span>
+                        </div>
+                        <div style={{ fontFamily: "monospace", fontSize: "11px", color: "#2563eb", letterSpacing: "0.5px" }}>
+                          {ulpin}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -248,8 +334,7 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
             </div>
           </Html>
         )}
-      </mesh>
-    </>
+    </group>
   );
 }
 

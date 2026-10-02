@@ -21,102 +21,69 @@ export default function App() {
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   ];
 
-  // Fetch a single tile from Overpass, with server fallback
-  const fetchTile = async (s, w, n, e, serverIdx = 0) => {
+  // Fetch a single area from Overpass, with server fallback
+  const fetchArea = async (s, w, n, e, serverIdx = 0) => {
     const server = OVERPASS_SERVERS[serverIdx % OVERPASS_SERVERS.length];
-    const query = `[out:json][timeout:90];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
+    const query = `[out:json][timeout:60];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 65000); // 65s hard timeout
 
     try {
+      setProgress(`Fetching from mirror ${serverIdx + 1}...`);
       const response = await fetch(server, {
         method: "POST",
         body: `data=${encodeURIComponent(query)}`,
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+      
       if (!response.ok) {
         // Try next server
         if (serverIdx < OVERPASS_SERVERS.length - 1) {
-          return fetchTile(s, w, n, e, serverIdx + 1);
+          return fetchArea(s, w, n, e, serverIdx + 1);
         }
-        throw new Error(`All servers failed (HTTP ${response.status})`);
+        throw new Error(`Overpass rejected the request (HTTP ${response.status}). The area might be too large.`);
       }
       return await response.json();
     } catch (err) {
       if (serverIdx < OVERPASS_SERVERS.length - 1) {
-        return fetchTile(s, w, n, e, serverIdx + 1);
+        return fetchArea(s, w, n, e, serverIdx + 1);
       }
       throw err;
     }
   };
 
-  // Split a big bounding box into a grid of smaller tiles
-  const splitIntoTiles = (s, w, n, e) => {
-    // Each tile should be roughly 0.01 degrees (~1.1km)
-    const TILE_SIZE = 0.01;
-    const tiles = [];
-    for (let lat = s; lat < n; lat += TILE_SIZE) {
-      for (let lon = w; lon < e; lon += TILE_SIZE) {
-        tiles.push({
-          s: lat,
-          w: lon,
-          n: Math.min(lat + TILE_SIZE, n),
-          e: Math.min(lon + TILE_SIZE, e),
-        });
-      }
-    }
-    return tiles;
-  };
-
   const handleGenerate = async (bounds) => {
     if (!bounds) return;
+    
+    const { s, w, n, e } = bounds;
+    const latSpan = n - s;
+    const lonSpan = e - w;
+    
+    // Check if the area is massively large (VPMS did this too)
+    if (latSpan + lonSpan > 0.15) {
+      const confirmLarge = window.confirm("The area you selected is very large. The Overpass server might reject it or it may take a long time to load. Do you want to proceed anyway?");
+      if (!confirmLarge) return;
+    }
+
     setLoading(true);
     setError('');
     setProgress('');
 
     try {
-      const { s, w, n, e, centerLat, centerLon } = bounds;
-
       // Set the center for projection (VPMS format: [NE, SW])
       setCenter([
         { lat: n, lng: e },
         { lat: s, lng: w },
       ]);
 
-      // Calculate area size in degrees
-      const latSpan = n - s;
-      const lonSpan = e - w;
-      const isLarge = (latSpan + lonSpan) > 0.02; // > ~2km total
+      // Fetch all buildings in a single request (with mirror fallback)
+      const data = await fetchArea(s, w, n, e);
+      const allBuildings = data.elements || [];
 
-      let allBuildings = [];
-
-      if (isLarge) {
-        // CHUNKED MODE: split into tiles and fetch in parallel batches
-        const tiles = splitIntoTiles(s, w, n, e);
-        const BATCH_SIZE = 4; // Fetch 4 tiles at a time to not overwhelm the API
-        let completed = 0;
-
-        for (let i = 0; i < tiles.length; i += BATCH_SIZE) {
-          const batch = tiles.slice(i, i + BATCH_SIZE);
-          setProgress(`Fetching tile ${completed + 1}–${Math.min(completed + BATCH_SIZE, tiles.length)} of ${tiles.length}...`);
-
-          const results = await Promise.allSettled(
-            batch.map((t, idx) => fetchTile(t.s, t.w, t.n, t.e, idx % OVERPASS_SERVERS.length))
-          );
-
-          for (const result of results) {
-            if (result.status === 'fulfilled' && result.value?.elements) {
-              allBuildings.push(...result.value.elements);
-            }
-          }
-          completed += batch.length;
-        }
-      } else {
-        // SIMPLE MODE: single fetch for small areas
-        setProgress('Fetching buildings...');
-        const data = await fetchTile(s, w, n, e);
-        allBuildings = data.elements || [];
-      }
-
-      // Deduplicate by OSM id (tiles may overlap at edges)
+      // Deduplicate by OSM id just in case
       const seen = new Set();
       const unique = [];
       for (const el of allBuildings) {
