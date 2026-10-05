@@ -106,6 +106,7 @@ export default function MapPicker({ onGenerate, onLoadSurveyedZone }) {
   const [isDrag, setIsDrag] = useState(true);
   const [bounds, setBounds] = useState(null);
   const [drawBounds, setDrawBounds] = useState(null);
+  const [showInfoModal, setShowInfoModal] = useState(false);
 
   const handleClickSwitchDrag = () => {
     setIsDrag(!isDrag);
@@ -179,6 +180,27 @@ export default function MapPicker({ onGenerate, onLoadSurveyedZone }) {
           onClick={handleClickSwitchDrag}
         >
           {isDrag ? "⬛ Draw Box" : "✋ Back to Drag"}
+        </button>
+        
+        <button
+          style={{
+            color: "#ffffff",
+            backgroundColor: "rgba(79, 70, 229, 0.95)",
+            backdropFilter: "blur(12px)",
+            border: "1px solid rgba(79, 70, 229, 0.4)",
+            padding: "0.65rem 0.95rem",
+            borderRadius: "999px",
+            cursor: "pointer",
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            boxShadow: "0 12px 24px rgba(79, 70, 229, 0.25)",
+            marginTop: "4px"
+          }}
+          onClick={() => setShowInfoModal(true)}
+        >
+          ℹ️ About this Prototype
         </button>
       </div>
 
@@ -266,6 +288,48 @@ export default function MapPicker({ onGenerate, onLoadSurveyedZone }) {
           >
             Generate 3D Diorama
           </button>
+        </div>
+      )}
+
+      {/* Info Modal */}
+      {showInfoModal && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 99999,
+          backgroundColor: "rgba(0,0,0,0.4)", display: "flex",
+          alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)"
+        }}>
+          <div style={{
+            backgroundColor: "#fff", width: "420px", borderRadius: "16px",
+            padding: "24px", boxShadow: "0 24px 48px rgba(0,0,0,0.2)",
+            display: "flex", flexDirection: "column", gap: "16px"
+          }}>
+            <h2 style={{ margin: 0, fontSize: "20px", color: "#111827" }}>Bhu-Drishti 3D <span style={{fontSize: "14px", color: "#6b7280"}}>Prototype</span></h2>
+            
+            <p style={{ margin: 0, fontSize: "14px", color: "#374151", lineHeight: 1.5 }}>
+              <strong>What is this?</strong><br/>
+              A proof-of-concept 3D Volumetric Property Mapping System. It generates instant 3D dioramas of cities, slices buildings into actionable floor plans, and generates unique 3D-ULPINs for vertical properties.
+            </p>
+            
+            <p style={{ margin: 0, fontSize: "14px", color: "#374151", lineHeight: 1.5 }}>
+              <strong>What is the Green Zone (HITEC City)?</strong><br/>
+              Green zones are <em>Pre-Surveyed</em> areas. We already have the dense, highly detailed data cached for this zone. Click it for an instant 0-second load time of a massive 3D sector!
+            </p>
+
+            <p style={{ margin: 0, fontSize: "14px", color: "#374151", lineHeight: 1.5 }}>
+              <strong>How to view outside HITEC City?</strong><br/>
+              Click <strong>"Draw Box"</strong> in the top right. Draw a rectangle over any part of the world map. The system will dynamically pull OpenStreetMap footprints and generate the 3D model on the fly!
+            </p>
+
+            <button 
+              onClick={() => setShowInfoModal(false)}
+              style={{
+                marginTop: "8px", padding: "10px", backgroundColor: "#2563eb",
+                color: "#fff", border: "none", borderRadius: "8px",
+                fontWeight: "bold", cursor: "pointer", fontSize: "14px"
+              }}>
+              Got it!
+            </button>
+          </div>
         </div>
       )}
     </div>
