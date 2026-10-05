@@ -25,10 +25,10 @@ export default function App() {
   // Fetch a single area from Overpass, with server fallback
   const fetchArea = async (s, w, n, e, serverIdx = 0) => {
     const server = OVERPASS_SERVERS[serverIdx % OVERPASS_SERVERS.length];
-    const query = `[out:json][timeout:25];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
+    const query = `[out:json][timeout:60];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s hard timeout
+    const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s hard timeout
 
     try {
       setProgress(`Fetching from mirror ${serverIdx + 1}...`);
@@ -105,7 +105,11 @@ export default function App() {
       setStep(1);
     } catch (err) {
       console.error(err);
-      setError(`Failed: ${err.message}. Try a smaller area or wait a minute.`);
+      let errorMsg = err.message;
+      if (err.name === 'AbortError' || errorMsg.includes('aborted')) {
+        errorMsg = "The Overpass map servers are currently overloaded and timed out.";
+      }
+      setError(`Failed: ${errorMsg} Please wait a moment and try again.`);
     } finally {
       setLoading(false);
       setProgress('');
