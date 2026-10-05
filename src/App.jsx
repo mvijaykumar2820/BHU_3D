@@ -17,34 +17,32 @@ export default function App() {
   // Overpass mirrors — we rotate between them to avoid rate limits
   const OVERPASS_SERVERS = [
     "https://overpass-api.de/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   ];
 
   // Fetch a single area from Overpass, with server fallback
   const fetchArea = async (s, w, n, e, serverIdx = 0) => {
     const server = OVERPASS_SERVERS[serverIdx % OVERPASS_SERVERS.length];
-    const query = `[out:json][timeout:60];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
+    const query = `[out:json][timeout:25];(way["building"](${s},${w},${n},${e});relation["building"](${s},${w},${n},${e}););out body geom;`;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 65000); // 65s hard timeout
+    const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s hard timeout
 
     try {
       setProgress(`Fetching from mirror ${serverIdx + 1}...`);
-      const response = await fetch(server, {
-        method: "POST",
-        body: `data=${encodeURIComponent(query)}`,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        signal: controller.signal,
-      });
+      
+      // Use GET instead of POST to avoid 406 Not Acceptable and 403 Forbidden from strict load balancers
+      const url = `${server}?data=${encodeURIComponent(query)}`;
+      const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
       
       if (!response.ok) {
-        // Try next server
         if (serverIdx < OVERPASS_SERVERS.length - 1) {
           return fetchArea(s, w, n, e, serverIdx + 1);
         }
-        throw new Error(`Overpass rejected the request (HTTP ${response.status}). The area might be too large.`);
+        throw new Error(`Overpass rejected the request (HTTP ${response.status}).`);
       }
       return await response.json();
     } catch (err) {
