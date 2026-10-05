@@ -183,8 +183,8 @@ export default function MapPicker({ onGenerate, onLoadSurveyedZone }) {
       </div>
 
       <MapContainer
-        center={[17.3850, 78.4867]}
-        zoom={14}
+        center={[17.4475, 78.3800]}
+        zoom={15}
         style={{ width: "100%", height: "100%" }}
       >
         <TileLayer
