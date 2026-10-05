@@ -84,6 +84,7 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
   const [hovered, setHovered] = useState(false);
   const [hoverPos, setHoverPos] = useState(null);
   const [hoveredFloor, setHoveredFloor] = useState(null);
+  const [selectedFloor, setSelectedFloor] = useState(null);
 
   const selectedBuildingId = useHiddenStore((s) => s.selectedBuildingId);
   const selectBuilding = useHiddenStore((s) => s.selectBuilding);
@@ -103,6 +104,7 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
   const closePopup = () => {
     setHovered(false);
     setHoveredFloor(null);
+    setSelectedFloor(null);
     setShowAnnotationForm(false);
     selectBuilding(null);
   };
@@ -163,13 +165,21 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
               rotation={[-Math.PI / 2, 0, 0]}
               onPointerOver={(e) => { setHoveredFloor(i); e.stopPropagation(); }}
               onPointerOut={(e) => { setHoveredFloor(null); e.stopPropagation(); }}
-              onClick={(e) => { selectBuilding(null); e.stopPropagation(); }}
+              onClick={(e) => { 
+                if (selectedFloor === i) {
+                  setSelectedFloor(null);
+                  selectBuilding(null);
+                } else {
+                  setSelectedFloor(i);
+                }
+                e.stopPropagation(); 
+              }}
             >
               <extrudeGeometry args={[shape, { steps: 1, depth: floorHeight, bevelEnabled: false }]} />
               <meshStandardMaterial 
-                color={isHoveredFloor ? "#fbbf24" : SELECTED_COLOR} 
+                color={selectedFloor === i ? "#ef4444" : isHoveredFloor ? "#fbbf24" : SELECTED_COLOR} 
                 transparent 
-                opacity={isHoveredFloor ? 1 : 0.85} 
+                opacity={(isHoveredFloor || selectedFloor === i) ? 1 : 0.85} 
               />
             </mesh>
           );
@@ -259,8 +269,21 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
                 </form>
               ) : null}
 
-              {/* Core info */}
-              {hasAnyData ? (
+              {/* Core info OR Floor Info */}
+              {selectedFloor !== null ? (
+                <div style={{ marginTop: "12px", borderTop: "1px solid rgba(0,0,0,0.08)", paddingTop: "12px" }}>
+                  <div style={{ fontWeight: 700, fontSize: "14px", color: "#111827", marginBottom: "8px" }}>
+                    Unit {selectedFloor + 1}01 Details
+                  </div>
+                  <InfoRow label="Floor Level" value={selectedFloor + 1} />
+                  <InfoRow label="Cadastral ID" value={generate3DUlpin(rawCenter.lat, rawCenter.lng, "A", selectedFloor + 1)} />
+                  <InfoRow label="Type" value="Commercial / IT Office" />
+                  <InfoRow label="Owner" value={["Ramesh Kumar", "Suresh Reddy", "Priya Sharma", "Abdul Khan", "Neha Gupta", "Vikram Singh", "Anjali Desai"][(buildingId + selectedFloor) % 7]} />
+                  <div style={{ marginTop: "8px", fontSize: "12px", color: "#059669", backgroundColor: "#ecfdf5", padding: "6px", borderRadius: "6px", border: "1px solid #a7f3d0" }}>
+                    Verified & Registered correctly.
+                  </div>
+                </div>
+              ) : hasAnyData ? (
                 <>
                   {tags?.building && tags.building !== "yes" && <InfoRow label="Type" value={tags.building} />}
                   {tags?.height && <InfoRow label="Height" value={`${tags.height} m`} />}
