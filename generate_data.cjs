@@ -23,12 +23,31 @@ for (let i = 0; i < 500; i++) {
     { lat: lat, lng: lng }
   ];
   
+  // Randomize building types and names for realism
+  const types = ["commercial", "residential", "office", "retail", "hospital", "school", "industrial", "yes"];
+  const bType = types[Math.floor(Math.random() * types.length)];
+  
+  let bName = undefined;
+  let amenity = undefined;
+  
+  if (Math.random() > 0.4) {
+    if (bType === "commercial" || bType === "office") bName = ["Tech Park", "Business Center", "Corporate Tower", "Innovation Hub"][Math.floor(Math.random() * 4)] + " " + i;
+    else if (bType === "residential") bName = ["Heights", "Residency", "Apartments", "Villas"][Math.floor(Math.random() * 4)] + " " + i;
+    else if (bType === "hospital") { bName = "City Hospital " + i; amenity = "hospital"; }
+    else if (bType === "school") { bName = "Public School " + i; amenity = "school"; }
+    else if (bType === "retail") { bName = "Shopping Mall " + i; amenity = "marketplace"; }
+  } else if (bHeight > 60) {
+    bName = "IT Tower " + i;
+  }
+  
   buildings.push({
     id: 9000000 + i,
     tags: {
-      "building": "yes",
+      "building": bType,
       "height": bHeight.toFixed(1),
-      "name": Math.random() > 0.7 ? "IT Park Building " + i : undefined
+      "building:levels": Math.max(1, Math.floor(bHeight / 3)).toString(),
+      "name": bName,
+      "amenity": amenity
     },
     geometry
   });
