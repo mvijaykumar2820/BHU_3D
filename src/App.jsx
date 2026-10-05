@@ -131,8 +131,8 @@ export default function App() {
         });
       }
       
-      const parsed = parseOSMData(fallbackData);
-      setMapData(parsed);
+      setProgress(`✅ Generated ${fallbackData.elements.length} synthetic buildings as fallback. Rendering 3D...`);
+      appendAreas(fallbackData.elements);
       setStep(1);
     } finally {
       setLoading(false);
