@@ -317,7 +317,7 @@ export default function MapPicker({ onGenerate, onLoadSurveyedZone }) {
 
             <p style={{ margin: 0, fontSize: "14px", color: "#374151", lineHeight: 1.5 }}>
               <strong>How to view outside HITEC City?</strong><br/>
-              Click <strong>"Draw Box"</strong> in the top right. Draw a rectangle over any part of the world map. The system will dynamically pull OpenStreetMap footprints and generate the 3D model on the fly!
+              Click <strong>"Draw Box"</strong> in the top right. Draw a <strong>very small box</strong> (about the size of 1-2 city blocks) over any part of the world map. The system will dynamically pull OpenStreetMap footprints and generate the 3D model on the fly!
             </p>
 
             <button 
