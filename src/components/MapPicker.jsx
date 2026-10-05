@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   MapContainer,
+  Polygon,
   Rectangle,
   TileLayer,
+  Tooltip,
   useMap,
   useMapEvents,
 } from "react-leaflet";
@@ -10,6 +12,22 @@ import L from "leaflet";
 import { GeoSearchControl, OpenStreetMapProvider } from 'leaflet-geosearch';
 import "leaflet/dist/leaflet.css";
 import "leaflet-geosearch/dist/geosearch.css";
+
+// Pre-surveyed zones
+const SURVEYED_ZONES = [
+  {
+    name: "HITEC City, Hyderabad",
+    status: "Survey Complete",
+    bounds: { s: 17.440, w: 78.370, n: 17.455, e: 78.390 },
+    polygon: [
+      [17.440, 78.370],
+      [17.440, 78.390],
+      [17.455, 78.390],
+      [17.455, 78.370],
+    ],
+    dataFile: "hitec_city",
+  },
+];
 
 // ─── Search Bar ───
 function SearchField() {
@@ -84,7 +102,7 @@ function RectangleSelector({ isDrag, drawBounds, onChange, onDrawChange }) {
 }
 
 // ─── Main Map Component ───
-export default function MapPicker({ onGenerate }) {
+export default function MapPicker({ onGenerate, onLoadSurveyedZone }) {
   const [isDrag, setIsDrag] = useState(true);
   const [bounds, setBounds] = useState(null);
   const [drawBounds, setDrawBounds] = useState(null);
@@ -165,7 +183,7 @@ export default function MapPicker({ onGenerate }) {
       </div>
 
       <MapContainer
-        center={[25.2677, 82.9913]}
+        center={[17.3850, 78.4867]}
         zoom={14}
         style={{ width: "100%", height: "100%" }}
       >
@@ -180,6 +198,37 @@ export default function MapPicker({ onGenerate }) {
           onChange={setBounds}
           onDrawChange={setDrawBounds}
         />
+
+        {/* Surveyed Zones */}
+        {SURVEYED_ZONES.map((zone) => (
+          <Polygon
+            key={zone.name}
+            positions={zone.polygon}
+            pathOptions={{
+              color: "#16a34a",
+              weight: 3,
+              fillColor: "#22c55e",
+              fillOpacity: 0.15,
+              dashArray: "6 4",
+            }}
+            eventHandlers={{
+              click: () => {
+                if (onLoadSurveyedZone) {
+                  onLoadSurveyedZone(zone);
+                }
+              },
+            }}
+          >
+            <Tooltip sticky direction="top" opacity={0.95}>
+              <div style={{ fontWeight: "bold", fontSize: "13px" }}>
+                ✅ {zone.name}
+              </div>
+              <div style={{ fontSize: "11px", color: "#16a34a" }}>
+                {zone.status} — Click to view 3D
+              </div>
+            </Tooltip>
+          </Polygon>
+        ))}
       </MapContainer>
 
       {/* Floating Action Button */}

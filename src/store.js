@@ -13,6 +13,8 @@ export const useAreaStore = create((set) => ({
 export const useHiddenStore = create((set, get) => ({
   hiddenIds: new Set(),
   selectedBuildingId: null,
+  activeBuildingData: null,
+  setActiveBuildingData: (data) => set({ activeBuildingData: data }),
   toggleHidden: (id) => set((state) => {
     const next = new Set(state.hiddenIds);
     if (next.has(id)) next.delete(id);

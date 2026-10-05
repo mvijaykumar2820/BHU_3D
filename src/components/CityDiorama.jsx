@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, Suspense } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { Html, Sky, Environment, Line, OrbitControls, useTexture } from "@react-three/drei";
+import { Html, Sky, Environment, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { useAreaStore, useHiddenStore, useAnnotationStore } from "../store";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
@@ -198,14 +198,13 @@ function Building({ shape, extrudeSettings, tags, buildingId, markerPosition, ra
 
         {/* Fixed Left Panel HUD */}
         {(hovered || selected) && (
-          <Html>
+          <Html zIndexRange={[100, 0]} style={{ position: "fixed", top: "24px", left: "24px", transform: "none", zIndex: 99999 }}>
             <div
               style={{
                 color: "#000000", backgroundColor: "#ffffff96", backdropFilter: "blur(12px)",
                 border: "1px solid rgba(255, 255, 255, 0.4)", padding: "16px", borderRadius: "12px",
                 fontFamily: "Inter, system-ui, sans-serif", fontSize: "13px",
                 width: "280px", boxShadow: "0 12px 32px rgba(0, 0, 0, 0.12)",
-                position: "fixed", top: "24px", left: "24px", zIndex: 99999,
               }}
             >
               {/* Title */}
@@ -430,86 +429,6 @@ function AutoFrameCamera({ buildingsData }) {
   return null;
 }
 
-// ─── Map Tile Math & Satellite Ground ───
-function lon2tile(lon, zoom) { return Math.floor(((lon + 180) / 360) * Math.pow(2, zoom)); }
-function lat2tile(lat, zoom) { return Math.floor(((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * Math.pow(2, zoom)); }
-function tile2lon(x, z) { return (x / Math.pow(2, z)) * 360 - 180; }
-function tile2lat(y, z) {
-  const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
-  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
-}
-
-function MapTile({ x, y, z, lat1, lon1, lat2, lon2, project }) {
-  // Esri World Imagery (No API key needed, high-quality satellite)
-  const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
-  const texture = useTexture(url);
-  texture.generateMipmaps = true;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  
-  // THREE.js textures are flipped vertically by default compared to web images
-  texture.colorSpace = THREE.SRGBColorSpace;
-
-  const pTopLeft = project(lat1, lon1);
-  const pBottomRight = project(lat2, lon2);
-  
-  const width = Math.abs(pBottomRight.x - pTopLeft.x);
-  const height = Math.abs(pTopLeft.y - pBottomRight.y);
-  
-  const cx = (pTopLeft.x + pBottomRight.x) / 2;
-  const cy = (pTopLeft.y + pBottomRight.y) / 2;
-
-  // Render slightly below 0 so it doesn't z-fight with roads
-  return (
-    <mesh position={[cx, -0.05, -cy]} rotation={[-Math.PI / 2, 0, 0]}>
-      <planeGeometry args={[width, height]} />
-      <meshBasicMaterial map={texture} side={THREE.DoubleSide} />
-    </mesh>
-  );
-}
-
-function SatelliteGround() {
-  const center = useAreaStore((s) => s.center);
-  if (!center || center.length < 2) return null;
-  
-  const zoom = 17; // Zoom 17 gives very crisp building-level detail
-  const south = center[1].lat;
-  const west = center[1].lng;
-  const north = center[0].lat;
-  const east = center[0].lng;
-
-  const refLat = (south + north) / 2;
-  const refLng = (west + east) / 2;
-  const project = createProjection(refLat, refLng);
-
-  // Pad the bounds slightly to cover the area fully
-  const minX = lon2tile(west, zoom) - 1;
-  const maxX = lon2tile(east, zoom) + 1;
-  const minY = lat2tile(north, zoom) - 1; 
-  const maxY = lat2tile(south, zoom) + 1;
-
-  const tiles = [];
-  for (let x = minX; x <= maxX; x++) {
-    for (let y = minY; y <= maxY; y++) {
-      const lon1 = tile2lon(x, zoom);
-      const lat1 = tile2lat(y, zoom);
-      const lon2 = tile2lon(x + 1, zoom);
-      const lat2 = tile2lat(y + 1, zoom);
-      tiles.push({ x, y, z: zoom, lat1, lon1, lat2, lon2 });
-    }
-  }
-
-  // Safety cap to prevent crashing the browser if area is massive
-  if (tiles.length > 200) return null;
-
-  return (
-    <group>
-      {tiles.map((t) => (
-        <MapTile key={`${t.z}_${t.x}_${t.y}`} {...t} project={project} />
-      ))}
-    </group>
-  );
-}
-
 // ─── Main Scene (matches VPMS Space component) ───
 export default function CityDiorama() {
   const areas = useAreaStore((state) => state.areas);
@@ -588,14 +507,10 @@ export default function CityDiorama() {
       <hemisphereLight skyColor="#b1e1ff" groundColor="#b97a20" intensity={0.4} />
 
       {/* Ground plane */}
-      <Suspense fallback={
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[sceneBounds.cx, -0.05, sceneBounds.cz]} receiveShadow>
-          <planeGeometry args={[sceneBounds.span * 3, sceneBounds.span * 3]} />
-          <meshStandardMaterial color="#e8e8e0" roughness={0.95} />
-        </mesh>
-      }>
-        <SatelliteGround />
-      </Suspense>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[sceneBounds.cx, -0.05, sceneBounds.cz]} receiveShadow>
+        <planeGeometry args={[sceneBounds.span * 3, sceneBounds.span * 3]} />
+        <meshStandardMaterial color="#e8e8e0" roughness={0.95} />
+      </mesh>
 
       {/* Buildings */}
       {buildingsData.map((item) =>

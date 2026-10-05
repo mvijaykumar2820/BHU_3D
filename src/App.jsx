@@ -114,6 +114,32 @@ export default function App() {
     }
   };
 
+  const handleLoadSurveyedZone = async (zone) => {
+    setLoading(true);
+    setError('');
+    setProgress(`Loading pre-surveyed data for ${zone.name}...`);
+    
+    try {
+      setCenter([
+        { lat: zone.bounds.n, lng: zone.bounds.e },
+        { lat: zone.bounds.s, lng: zone.bounds.w },
+      ]);
+      
+      const module = await import(`./data/${zone.dataFile}.json`);
+      const data = module.default || module;
+      
+      setProgress(`✅ Loaded ${data.buildings.length.toLocaleString()} buildings. Rendering 3D...`);
+      appendAreas(data.buildings);
+      setStep(1);
+    } catch(err) {
+      console.error(err);
+      setError(`Failed to load data for ${zone.name}.`);
+    } finally {
+      setLoading(false);
+      setProgress('');
+    }
+  };
+
   const handleBack = () => {
     setStep(0);
     appendAreas([]);
@@ -156,7 +182,7 @@ export default function App() {
                 <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
               </div>
             )}
-            <MapPicker onGenerate={handleGenerate} />
+            <MapPicker onGenerate={handleGenerate} onLoadSurveyedZone={handleLoadSurveyedZone} />
           </div>
         </div>
       )}
