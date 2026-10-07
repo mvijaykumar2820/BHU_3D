@@ -366,45 +366,55 @@ function InfoRow({ label, value }) {
   );
 }
 
-// ─── Roads (exactly like VPMS: uses Line from drei) ───
+// ─── Roads (instant synthetic grid — no API call needed) ───
 function Roads() {
-  const [roads, setRoads] = useState([]);
   const center = useAreaStore((state) => state.center);
+  const areas = useAreaStore((state) => state.areas);
 
   const refLat = (center[1].lat + center[0].lat) / 2;
   const refLng = (center[1].lng + center[0].lng) / 2;
   const project = createProjection(refLat, refLng);
 
-  useEffect(() => {
-    if (!center || center.length < 2) return;
-    const south = center[1].lat;
-    const west = center[1].lng;
-    const north = center[0].lat;
-    const east = center[0].lng;
-    const query = `[out:json][timeout:25];(way["highway"](${south},${west},${north},${east}););out body geom;`;
+  // Generate road grid lines from the bounding box
+  const roadLines = useMemo(() => {
+    if (!center || center.length < 2) return [];
 
-    fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      body: query,
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    })
-      .then((response) => response.json())
-      .then((data) => setRoads(data.elements || []))
-      .catch((err) => console.error(err));
+    const south = Math.min(center[0].lat, center[1].lat);
+    const north = Math.max(center[0].lat, center[1].lat);
+    const west = Math.min(center[0].lng, center[1].lng);
+    const east = Math.max(center[0].lng, center[1].lng);
+
+    const lines = [];
+    const gridStep = 0.002; // ~200m between roads
+
+    // Horizontal roads (west to east)
+    for (let lat = south; lat <= north; lat += gridStep) {
+      const p1 = project(lat, west);
+      const p2 = project(lat, east);
+      lines.push([
+        new THREE.Vector3(p1.x, 0.08, -p1.y),
+        new THREE.Vector3(p2.x, 0.08, -p2.y),
+      ]);
+    }
+
+    // Vertical roads (south to north)
+    for (let lng = west; lng <= east; lng += gridStep) {
+      const p1 = project(south, lng);
+      const p2 = project(north, lng);
+      lines.push([
+        new THREE.Vector3(p1.x, 0.08, -p1.y),
+        new THREE.Vector3(p2.x, 0.08, -p2.y),
+      ]);
+    }
+
+    return lines;
   }, [center]);
 
   return (
     <>
-      {roads.map((road) => {
-        if (!road.geometry || road.geometry.length < 2) return null;
-        const points = road.geometry.map((pt) => {
-          const v = project(pt.lat, pt.lon);
-          return new THREE.Vector3(v.x, 0.1, -v.y);
-        });
-        return (
-          <Line key={road.id} points={points} color="#34f516" lineWidth={1} userData={{ exportToGLB: true }} />
-        );
-      })}
+      {roadLines.map((pts, i) => (
+        <Line key={`road-${i}`} points={pts} color="#34f516" lineWidth={1} userData={{ exportToGLB: true }} />
+      ))}
     </>
   );
 }
