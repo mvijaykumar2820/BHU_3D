@@ -366,55 +366,124 @@ function InfoRow({ label, value }) {
   );
 }
 
-// ─── Roads (instant synthetic grid — no API call needed) ───
+// ─── Roads (pre-cached for HITEC City, API+fallback for custom areas) ───
 function Roads() {
+  const [roads, setRoads] = useState([]);
   const center = useAreaStore((state) => state.center);
-  const areas = useAreaStore((state) => state.areas);
 
   const refLat = (center[1].lat + center[0].lat) / 2;
   const refLng = (center[1].lng + center[0].lng) / 2;
   const project = createProjection(refLat, refLng);
 
-  // Generate road grid lines from the bounding box
-  const roadLines = useMemo(() => {
-    if (!center || center.length < 2) return [];
+  // Generate curved synthetic roads as fallback
+  const generateSyntheticRoads = (south, west, north, east) => {
+    const synth = [];
+    // Main arterial roads (3 horizontal, 3 vertical) with curves
+    const hLats = [south + (north-south)*0.25, (south+north)/2, south + (north-south)*0.75];
+    const vLngs = [west + (east-west)*0.25, (west+east)/2, west + (east-west)*0.75];
+    
+    hLats.forEach((lat, idx) => {
+      const geom = [];
+      for (let i = 0; i <= 20; i++) {
+        const t = i / 20;
+        geom.push({ lat: lat + Math.sin(t * Math.PI * 3) * 0.0002, lon: west + t * (east - west) });
+      }
+      synth.push({ id: 7100000 + idx, tags: { highway: "primary" }, geometry: geom });
+    });
+    
+    vLngs.forEach((lng, idx) => {
+      const geom = [];
+      for (let i = 0; i <= 20; i++) {
+        const t = i / 20;
+        geom.push({ lat: south + t * (north - south), lon: lng + Math.sin(t * Math.PI * 2.5) * 0.0002 });
+      }
+      synth.push({ id: 7100010 + idx, tags: { highway: "primary" }, geometry: geom });
+    });
+    
+    // Secondary / residential roads with organic curves
+    for (let i = 0; i < 40; i++) {
+      const isH = Math.random() > 0.5;
+      const geom = [];
+      const steps = 8 + Math.floor(Math.random() * 8);
+      if (isH) {
+        const lat = south + Math.random() * (north - south);
+        const startLng = west + Math.random() * (east - west) * 0.5;
+        const span = 0.003 + Math.random() * 0.008;
+        for (let j = 0; j <= steps; j++) {
+          const t = j / steps;
+          geom.push({ lat: lat + Math.sin(t * Math.PI * 2) * 0.00015, lon: startLng + t * span });
+        }
+      } else {
+        const lng = west + Math.random() * (east - west);
+        const startLat = south + Math.random() * (north - south) * 0.5;
+        const span = 0.002 + Math.random() * 0.006;
+        for (let j = 0; j <= steps; j++) {
+          const t = j / steps;
+          geom.push({ lat: startLat + t * span, lon: lng + Math.sin(t * Math.PI * 1.5) * 0.00012 });
+        }
+      }
+      synth.push({ id: 7101000 + i, tags: { highway: "residential" }, geometry: geom });
+    }
+    return synth;
+  };
 
+  useEffect(() => {
+    if (!center || center.length < 2) return;
     const south = Math.min(center[0].lat, center[1].lat);
     const north = Math.max(center[0].lat, center[1].lat);
     const west = Math.min(center[0].lng, center[1].lng);
     const east = Math.max(center[0].lng, center[1].lng);
-
-    const lines = [];
-    const gridStep = 0.002; // ~200m between roads
-
-    // Horizontal roads (west to east)
-    for (let lat = south; lat <= north; lat += gridStep) {
-      const p1 = project(lat, west);
-      const p2 = project(lat, east);
-      lines.push([
-        new THREE.Vector3(p1.x, 0.08, -p1.y),
-        new THREE.Vector3(p2.x, 0.08, -p2.y),
-      ]);
+    
+    // Check if this is HITEC City bounds (pre-cached data)
+    const isHitecCity = south > 17.43 && south < 17.46 && west > 78.36 && west < 78.40;
+    
+    if (isHitecCity) {
+      import('../data/hitec_city_roads.json')
+        .then((mod) => {
+          const data = mod.default || mod;
+          setRoads(data.roads || []);
+        })
+        .catch(() => setRoads(generateSyntheticRoads(south, west, north, east)));
+      return;
     }
-
-    // Vertical roads (south to north)
-    for (let lng = west; lng <= east; lng += gridStep) {
-      const p1 = project(south, lng);
-      const p2 = project(north, lng);
-      lines.push([
-        new THREE.Vector3(p1.x, 0.08, -p1.y),
-        new THREE.Vector3(p2.x, 0.08, -p2.y),
-      ]);
-    }
-
-    return lines;
+    
+    // For custom areas, try Overpass API with fast timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const query = `[out:json][timeout:15];(way["highway"](${south},${west},${north},${east}););out body geom;`;
+    
+    fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      body: `data=${encodeURIComponent(query)}`,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      signal: controller.signal,
+    })
+      .then((res) => { clearTimeout(timeoutId); return res.json(); })
+      .then((data) => {
+        if (data.elements && data.elements.length > 0) {
+          setRoads(data.elements);
+        } else {
+          setRoads(generateSyntheticRoads(south, west, north, east));
+        }
+      })
+      .catch(() => {
+        clearTimeout(timeoutId);
+        setRoads(generateSyntheticRoads(south, west, north, east));
+      });
   }, [center]);
 
   return (
     <>
-      {roadLines.map((pts, i) => (
-        <Line key={`road-${i}`} points={pts} color="#34f516" lineWidth={1} userData={{ exportToGLB: true }} />
-      ))}
+      {roads.map((road) => {
+        if (!road.geometry || road.geometry.length < 2) return null;
+        const points = road.geometry.map((pt) => {
+          const v = project(pt.lat, pt.lon);
+          return new THREE.Vector3(v.x, 0.1, -v.y);
+        });
+        return (
+          <Line key={road.id} points={points} color="#34f516" lineWidth={1} userData={{ exportToGLB: true }} />
+        );
+      })}
     </>
   );
 }
