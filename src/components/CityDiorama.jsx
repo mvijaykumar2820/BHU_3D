@@ -385,13 +385,13 @@ function Roads() {
     // For custom areas, try Overpass API with fast timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
-    const query = `[out:json][timeout:15];(way["highway"](${south},${west},${north},${east}););out body geom;`;
+    // Using the exact approach from the VPMS repo
+    const query = `[out:json][timeout:25];(way["highway"](${south},${west},${north},${east}););out body geom;`;
     
     fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
-      body: `data=${encodeURIComponent(query)}`,
+      body: query,
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      signal: controller.signal,
     })
       .then((res) => { clearTimeout(timeoutId); return res.json(); })
       .then((data) => {
